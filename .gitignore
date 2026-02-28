@@ -25,6 +25,9 @@ models/*.pth
 models/*.onnx
 models/*.engine
 
+# Allow config files (small text files, OK for git)
+!models/*.py
+
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb

@@ -106,16 +106,23 @@ class VideoProcessor:
     # ------------------------------------------------------------------
 
     def download(self, url: str, filename: Optional[str] = None) -> Path:
-        """Download a video from *url* using yt-dlp.
+        """Download a video from *url* using yt-dlp, or return local file path.
 
         Args:
-            url: YouTube (or other yt-dlp-supported) video URL.
+            url: YouTube URL, other yt-dlp-supported URL, or local file path.
             filename: Optional stem for the output file.  When ``None`` the
                 video ID is used.
 
         Returns:
-            Path to the downloaded video file.
+            Path to the downloaded (or local) video file.
         """
+        # Check if this is a local file path
+        local_path = Path(url)
+        if local_path.exists() and local_path.is_file():
+            logger.info("Using local video file: %s", local_path)
+            return local_path
+        
+        # Otherwise, download from URL
         video_dir = self.output_dir / "videos"
         video_dir.mkdir(parents=True, exist_ok=True)
 

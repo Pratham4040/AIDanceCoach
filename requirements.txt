@@ -1,31 +1,46 @@
-# ─── Core Scientific Stack ────────────────────────────────────────────────────
-numpy>=1.24.0
-scipy>=1.11.0
+# ═══════════════════════════════════════════════════════════════════════════════
+# AI DANCE COACH - DEPENDENCIES (Install AFTER PyTorch & MMCV)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# ⚠️  DO NOT RUN: pip install -r requirements.txt directly!
+#
+# REQUIRED PRE-INSTALLATION (in this exact order):
+# 1. pip install torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu121
+# 2. pip install openmim
+# 3. mim install mmengine==0.10.5
+# 4. pip install mmcv==2.1.0 -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.1.0/index.html
+# 5. THEN run: pip install -r requirements.txt
+#
+# See SETUP_GUIDE.md for complete instructions.
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# ─── Video / Image Processing ─────────────────────────────────────────────────
+# ─── OpenMMLab High-Level Libraries ───────────────────────────────────────────
+# NOTE: mmcv and mmengine should already be installed in steps above
+mmpose==1.3.2
+mmaction2==1.2.0
+mmdet==3.3.0
+
+# ─── Edge Tracking & Computer Vision ──────────────────────────────────────────
+mediapipe>=0.10.9
 opencv-python>=4.8.0
-yt-dlp>=2024.1.0
+opencv-contrib-python>=4.8.0
 
-# ─── Audio Processing ─────────────────────────────────────────────────────────
-librosa>=0.10.0
+# ─── Video Processing & Audio ─────────────────────────────────────────────────
+yt-dlp>=2024.3.10
+librosa>=0.10.1
 soundfile>=0.12.0
+ffmpeg-python>=0.2.0
 
-# ─── Pose Estimation ──────────────────────────────────────────────────────────
-mediapipe>=0.10.0
+# ─── Hardware Optimization ────────────────────────────────────────────────────
+onnxruntime-gpu>=1.16.3
+# Use onnxruntime>=1.16.3 instead if no GPU available
 
-# ─── Deep Learning (TCN, model training) ─────────────────────────────────────
-torch>=2.0.0
-torchvision>=0.15.0
-
-# ─── OpenMMLab RTMPose / RTMO ─────────────────────────────────────────────────
-mmcv>=2.0.0
-mmdet>=3.0.0
-mmpose>=1.1.0
-
-# ─── ONNX Runtime (CPU/GPU inference) ────────────────────────────────────────
-onnxruntime>=1.16.0
-# onnxruntime-gpu>=1.16.0  # Uncomment for GPU support
+# ─── Math & Alignment ─────────────────────────────────────────────────────────
+numpy<2.0.0  # CRITICAL: NumPy 2.x breaks MMCV and other compiled C++ modules
+scipy>=1.11.0
+fastdtw>=0.3.4
 
 # ─── Utilities ────────────────────────────────────────────────────────────────
 tqdm>=4.65.0
 pyyaml>=6.0
+colorama>=0.4.6

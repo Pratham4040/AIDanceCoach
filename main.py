@@ -32,6 +32,7 @@ Arguments
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import logging
 import sys
 from pathlib import Path
@@ -93,31 +94,48 @@ def build_reference(
     visual_extractor = VisualFeatureExtractor()
 
     # Phase 3: extract reference poses
-    ref_tracker = RTMPoseTracker(
-        pose_config=pose_config,
-        pose_checkpoint=pose_checkpoint,
-        det_config=det_config,
-        det_checkpoint=det_checkpoint,
-        device=device,
-    )
+    use_rtmpose = bool(pose_config and pose_checkpoint)
+    if use_rtmpose:
+        try:
+            ref_tracker: RTMPoseTracker | BlazePoseTracker = RTMPoseTracker(
+                pose_config=pose_config,
+                pose_checkpoint=pose_checkpoint,
+                det_config=det_config,
+                det_checkpoint=det_checkpoint,
+                device=device,
+            )
+            logger.info("Using RTMPoseTracker for reference extraction.")
+        except Exception as exc:
+            logger.warning(
+                "RTMPose initialization failed (%s). Falling back to BlazePoseTracker.",
+                exc,
+            )
+            ref_tracker = BlazePoseTracker()
+    else:
+        logger.info(
+            "No RTMPose config/checkpoint provided. Using BlazePoseTracker for reference extraction."
+        )
+        ref_tracker = BlazePoseTracker()
 
     import cv2
 
     visual_features: list[np.ndarray] = []
     all_poses: list[np.ndarray] = []
 
-    logger.info("Extracting reference poses from %d frames …", len(frame_paths))
-    for i, fp in enumerate(frame_paths):
-        frame = cv2.imread(fp)
-        if frame is None:
-            continue
-        pose_result = ref_tracker.process_frame(frame, frame_index=i)
-        if pose_result is None or pose_result.keypoints_normalized is None:
-            continue
-        kp = pose_result.keypoints_normalized[:, :2]
-        bone_vec = visual_extractor.extract(kp)
-        visual_features.append(bone_vec)
-        all_poses.append(kp.flatten())
+    tracker_context = ref_tracker if isinstance(ref_tracker, BlazePoseTracker) else nullcontext(ref_tracker)
+    with tracker_context as tracker:
+        logger.info("Extracting reference poses from %d frames …", len(frame_paths))
+        for i, fp in enumerate(frame_paths):
+            frame = cv2.imread(fp)
+            if frame is None:
+                continue
+            pose_result = tracker.process_frame(frame, frame_index=i)
+            if pose_result is None or pose_result.keypoints_normalized is None:
+                continue
+            kp = pose_result.keypoints_normalized[:, :2]
+            bone_vec = visual_extractor.extract(kp)
+            visual_features.append(bone_vec)
+            all_poses.append(kp.flatten())
 
     if not visual_features:
         logger.error("No valid frames extracted. Aborting.")
