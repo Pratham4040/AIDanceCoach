@@ -20,11 +20,14 @@ An end-to-end AI system that ingests YouTube dance tutorials, segments them into
 
 - **Automated Video Ingestion**: Download dance tutorials from YouTube using `yt-dlp`
 - **Intelligent Segmentation**: Uses Temporal Convolutional Networks (TCN) to segment videos into discrete dance steps
+- **Step Image Extraction**: Automatically saves representative frames for each dance step (`step_001.jpg`, `step_002.jpg`, ...)
+- **Skeleton Overlay Videos**: Generates MP4 videos with pose skeletons visualized on the reference video
 - **Dual Pose Estimation**:
   - **RTMPose/RTMO** (OpenMMLab) for high-accuracy reference pose extraction from tutorials
   - **MediaPipe BlazePose** for fast, lightweight real-time tracking of user movements
 - **Temporal Alignment**: Spatial-Weighted Fast Dynamic Time Warping (S-WFDTW) for real-time motion comparison
 - **Real-Time Visual Feedback**: Color-coded skeleton overlay (🟢 Green = correct, 🟡 Yellow = minor deviation, 🔴 Red = critical error)
+- **Robust UI Error Handling**: Graceful degradation when display windows fail (headless environment support)
 - **Hardware Optimization**: ONNX Runtime support for CPU acceleration, TensorRT for GPU edge devices
 
 ---
@@ -36,11 +39,11 @@ The system operates in **8 phases**:
 ### **Phase 1: Ingestion & Preprocessing**
 Downloads YouTube videos and extracts frames in parallel using `ProcessPoolExecutor` to bypass Python's GIL. Applies grayscale conversion and background subtraction for cleaner pose detection.
 
-### **Phase 2: Action Segmentation**
-Extracts visual features (skeletal bone vectors) and audio features (Mel spectrogram) using `librosa`. Feeds these multi-modal features into a **Temporal Convolutional Network (TCN)** to output segmentation probability curves, identifying discrete dance steps via peak-picking.
+### **Phase 2: Reference Pose Extraction**
+Uses **OpenMMLab's RTMPose** (specifically RTMO for high accuracy) to extract ground-truth keypoints from the instructor's video. This happens **before** segmentation to ensure high-quality reference data for all frames.
 
-### **Phase 3: Reference Pose Extraction**
-Uses **OpenMMLab's RTMPose** (specifically RTMO for high accuracy) to extract ground-truth keypoints from the instructor's segmented video.
+### **Phase 3: Action Segmentation**
+Extracts visual features (skeletal bone vectors) and audio features (Mel spectrogram) using `librosa`. Feeds these multi-modal features into a **Temporal Convolutional Network (TCN)** to output segmentation probability curves, identifying discrete dance steps via peak-picking using the poses extracted in Phase 2.
 
 ### **Phase 4: Spatial Normalization**
 Translates all coordinates (both instructor and user) to a **root origin (hip center)** and scales them based on **torso length**. Converts raw (x, y) coordinates to **angular limb vectors** (RotJoints) for rotation-invariant comparison.
@@ -311,7 +314,13 @@ AIDanceCoach/
 │   └── copilot-instructions.md      # Development guidelines and architecture docs
 │
 ├── data/
-│   └── raw/                         # Downloaded videos and extracted frames
+│   ├── raw/                         # Downloaded videos and extracted frames
+│   │   └── .gitkeep
+│   ├── extracted_steps/             # Saved step images (step_001.jpg, step_002.jpg, ...)
+│   │   └── .gitkeep
+│   ├── output_videos/               # Reference skeleton overlay videos (MP4/AVI)
+│   │   └── .gitkeep
+│   └── rendered_videos/             # Final output videos with side-by-side comparisons
 │       └── .gitkeep
 │
 ├── models/                          # Trained TCN models and checkpoints
@@ -325,16 +334,16 @@ AIDanceCoach/
 │   │   └── video_processor.py       # VideoProcessor class: yt-dlp integration,
 │   │                                # parallel frame extraction with ProcessPoolExecutor
 │   │
-│   ├── segmentation/                # Phase 2: Dance step segmentation
+│   ├── segmentation/                # Phase 3: Dance step segmentation
 │   │   ├── __init__.py
 │   │   └── tcn_segmenter.py         # TCNSegmenter: audio/visual feature extraction,
 │   │                                # Temporal Convolutional Network for segmentation
 │   │
-│   ├── pose/                        # Phase 3-5: Pose estimation & normalization
+│   ├── pose/                        # Phase 2, 4-5: Pose estimation & normalization
 │   │   ├── __init__.py
-│   │   └── tracker.py               # BlazePoseTracker (MediaPipe) for real-time user tracking
-│   │                                # RTMPoseTracker (OpenMMLab) for reference pose extraction
-│   │                                # PoseNormalizer for spatial normalization & RotJoints
+│   │   └── tracker.py               # BlazePoseTracker (MediaPipe) for real-time user tracking (Phase 5)
+│   │                                # RTMPoseTracker (OpenMMLab) for reference pose extraction (Phase 2)
+│   │                                # PoseNormalizer for spatial normalization & RotJoints (Phase 4)
 │   │
 │   ├── alignment/                   # Phase 6: Temporal alignment & scoring
 │   │   ├── __init__.py
@@ -739,13 +748,19 @@ python main.py \
 | `--det-ckpt` | Path to MMDet checkpoint | Auto-detect |
 | `--window-size` | S-WFDTW window size (frames) | `10` |
 | `--output-dir` | Output directory for processed data | `data/raw` |
+| `--extracted-steps-dir` | Directory to save step images (step_001.jpg, ...) | `data/extracted_steps` |
+| `--reference-output-videos-dir` | Directory to save reference skeleton overlay videos | `data/output_videos` |
 
 ### **Workflow**
 
-1. **Download & Process**: The system downloads the tutorial video and segments it into steps
-2. **Reference Extraction**: Extracts instructor's poses from each step
-3. **Live Tracking**: Opens webcam feed and starts real-time tracking
-4. **Feedback Loop**: Displays color-coded skeleton showing how well you're matching the reference
+1. **Download & Process**: The system downloads the tutorial video and extracts frames
+2. **Reference Extraction**: Extracts instructor's poses from the entire video using RTMPose
+3. **Action Segmentation**: Identifies discrete dance steps using TCN-based segmentation
+4. **Save Outputs**: 
+   - Saves one representative frame per step as `step_001.jpg`, `step_002.jpg`, etc.
+   - Generates skeleton overlay video of the instructor with pose visualization
+5. **Live Tracking**: Opens webcam feed and starts real-time tracking
+6. **Feedback Loop**: Displays color-coded skeleton showing how well you're matching the reference
 
 ---
 
@@ -755,9 +770,9 @@ python main.py \
 |---------|---------|-------|
 | **yt-dlp** | Video download from YouTube | Phase 1 |
 | **opencv-python** | Frame extraction, UI rendering | Phase 1, 7 |
-| **librosa** | Audio feature extraction (Mel spectrograms) | Phase 2 |
-| **torch** | TCN model training/inference | Phase 2 |
-| **mmpose/mmdet** | RTMPose reference pose extraction | Phase 3 |
+| **mmpose/mmdet** | RTMPose reference pose extraction | Phase 2 |
+| **librosa** | Audio feature extraction (Mel spectrograms) | Phase 3 |
+| **torch** | TCN model training/inference | Phase 3 |
 | **mediapipe** | BlazePose real-time user tracking | Phase 5 |
 | **numpy/scipy** | Numerical computation, DTW | Phase 6 |
 | **onnxruntime** | Accelerated inference | Phase 8 |
