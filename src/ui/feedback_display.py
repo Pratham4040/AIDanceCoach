@@ -54,11 +54,26 @@ BLAZEPOSE_CONNECTIONS: List[Tuple[int, int]] = [
     (24, 26), (26, 28), (28, 30), (30, 32), (32, 28),
 ]
 
-# Mapping from connection index to the joint index whose score drives the color
-# (we use the distal joint — index [1] — of each bone)
-_BONE_JOINT_MAP: Dict[int, int] = {
-    i: conn[1] for i, conn in enumerate(BLAZEPOSE_CONNECTIONS)
-}
+# RTMPose 17-point COCO connections (10 bones)
+RTMPOSE_CONNECTIONS: List[Tuple[int, int]] = [
+    (5, 7), (7, 9),       # Left arm
+    (6, 8), (8, 10),      # Right arm
+    (5, 11), (6, 12),     # Torso
+    (11, 13), (13, 15),   # Left leg
+    (12, 14), (14, 16),   # Right leg
+]
+
+
+def _get_bone_joint_map(connections: List[Tuple[int, int]]) -> Dict[int, int]:
+    """Dynamically generate bone-to-joint mapping for skeleton topology.
+    
+    Args:
+        connections: List of (joint_a, joint_b) tuples forming the skeleton.
+        
+    Returns:
+        Mapping from bone index to distal joint index for color-coding.
+    """
+    return {i: conn[1] for i, conn in enumerate(connections)}
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +105,7 @@ def _draw_skeleton(
     connections: List[Tuple[int, int]],
     joint_radius: int = 5,
     bone_thickness: int = 2,
+    source: str = "blazepose",
 ) -> np.ndarray:
     """Draw a wireframe skeleton on *frame*.
 
@@ -101,11 +117,15 @@ def _draw_skeleton(
         connections: List of ``(joint_a, joint_b)`` tuples.
         joint_radius: Radius in pixels for joint circles.
         bone_thickness: Line thickness in pixels for bone segments.
+        source: Skeleton source ("blazepose" or "rtmpose") for topology mapping.
 
     Returns:
         The annotated frame (same object as *frame*).
     """
     num_joints = keypoints.shape[0]
+    
+    # Get dynamic bone-to-joint mapping for this skeleton topology
+    bone_joint_map = _get_bone_joint_map(connections)
 
     # Draw bones
     for conn_idx, (a, b) in enumerate(connections):
@@ -114,7 +134,7 @@ def _draw_skeleton(
         pt_a = (int(keypoints[a, 0]), int(keypoints[a, 1]))
         pt_b = (int(keypoints[b, 0]), int(keypoints[b, 1]))
 
-        distal_joint = _BONE_JOINT_MAP.get(conn_idx, b)
+        distal_joint = bone_joint_map.get(conn_idx, b)
         score = float(joint_scores[distal_joint]) if joint_scores is not None else None
         color = _score_to_color(score)
 
@@ -194,28 +214,73 @@ class FeedbackDisplay:
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open camera index {self.camera_index}")
 
-        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+        # Initialize window with error handling
+        try:
+            cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+            logger.debug("Display window '%s' created successfully", self.window_name)
+        except cv2.error as e:
+            logger.error("Failed to create display window: %s", e)
+            cap.release()
+            raise RuntimeError(f"Cannot create display window: {e}") from e
+        
         frame_count = 0
+        window_failed = False
 
         try:
             while True:
                 ret, frame = cap.read()
-                if not ret:
-                    logger.warning("Failed to grab frame from camera %d", self.camera_index)
+                if not ret or frame is None:
+                    logger.warning(
+                        "Failed to grab frame from camera %d (ret=%s, frame=%s)",
+                        self.camera_index,
+                        ret,
+                        "None" if frame is None else "valid",
+                    )
                     break
 
-                annotated = self.render_frame(frame)
-                cv2.imshow(self.window_name, annotated)
+                # Render frame with error handling
+                try:
+                    annotated = self.render_frame(frame)
+                except Exception as e:
+                    logger.error("Failed to render frame: %s", e, exc_info=True)
+                    break
+                
+                # Display with error handling
+                if not window_failed:
+                    try:
+                        cv2.imshow(self.window_name, annotated)
+                    except cv2.error as e:
+                        logger.error("cv2.imshow failed: %s. Continuing without display.", e)
+                        window_failed = True
 
                 frame_count += 1
                 if max_frames > 0 and frame_count >= max_frames:
+                    logger.info("Reached max_frames limit (%d frames)", frame_count)
                     break
 
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+                # Handle quit key gracefully
+                try:
+                    key = cv2.waitKey(1)
+                    if key & 0xFF == ord("q"):
+                        logger.info("User pressed 'q' to quit")
+                        break
+                except cv2.error as e:
+                    logger.warning("cv2.waitKey error: %s", e)
+                    # Continue despite waitKey error
+        except KeyboardInterrupt:
+            logger.info("User interrupted (Ctrl+C)")
+        except Exception as e:
+            logger.error("Unexpected error in feedback loop: %s", e, exc_info=True)
+            raise
         finally:
+            logger.debug("Closing camera and display window...")
             cap.release()
-            cv2.destroyAllWindows()
+            try:
+                cv2.destroyAllWindows()
+                logger.debug("Display windows closed")
+            except cv2.error as e:
+                logger.warning("Error closing display windows: %s", e)
+            logger.info("Feedback loop finished after %d frames", frame_count)
 
     # ------------------------------------------------------------------
     # Per-frame rendering

@@ -254,6 +254,7 @@ class RTMPoseTracker:
         try:
             from mmpose.apis import init_model as init_pose_model, inference_topdown
             from mmdet.apis import init_detector, inference_detector
+            from mmengine.registry import DefaultScope
         except ImportError as exc:
             raise ImportError(
                 "mmpose and mmdet are required for RTMPoseTracker. "
@@ -262,11 +263,21 @@ class RTMPoseTracker:
 
         self._init_pose_model = init_pose_model
         self._inference_topdown = inference_topdown
+        self._DefaultScope = DefaultScope
 
         self.pose_model = init_pose_model(pose_config, pose_checkpoint, device=device)
         self.normalizer = PoseNormalizer(
-            left_hip_idx=11, right_hip_idx=12,
-            left_shoulder_idx=5, right_shoulder_idx=6,
+            left_hip_idx=11,
+            right_hip_idx=12,
+            left_shoulder_idx=5,
+            right_shoulder_idx=6,
+            bone_pairs=[
+                (5, 7), (7, 9),
+                (6, 8), (8, 10),
+                (5, 11), (6, 12),
+                (11, 13), (13, 15),
+                (12, 14), (14, 16),
+            ],
         )
         self.bbox_thr = bbox_thr
         self.kpt_thr = kpt_thr
@@ -294,7 +305,9 @@ class RTMPoseTracker:
             person was detected above the confidence threshold.
         """
         if self.det_model is not None:
-            det_result = self._inference_detector(self.det_model, frame_bgr)
+            # Temporarily switch scope to mmdet for detector inference
+            with self._DefaultScope.overwrite_default_scope('mmdet'):
+                det_result = self._inference_detector(self.det_model, frame_bgr)
             bboxes = det_result.pred_instances.bboxes.cpu().numpy()
             scores = det_result.pred_instances.scores.cpu().numpy()
             bboxes = bboxes[scores > self.bbox_thr]
@@ -304,12 +317,19 @@ class RTMPoseTracker:
             h, w = frame_bgr.shape[:2]
             bboxes = np.array([[0, 0, w, h]], dtype=np.float32)
 
-        pose_results = self._inference_topdown(self.pose_model, frame_bgr, bboxes)
+        # Ensure pose inference is in mmpose scope
+        with self._DefaultScope.overwrite_default_scope('mmpose'):
+            pose_results = self._inference_topdown(self.pose_model, frame_bgr, bboxes)
         if not pose_results:
             return None
 
         # Take the highest-confidence person
         best = pose_results[0]
+        
+        # Verify keypoints were actually detected
+        if len(best.pred_instances.keypoints) == 0:
+            return None
+        
         keypoints = best.pred_instances.keypoints[0]  # (num_joints, 2 or 3)
 
         if keypoints.shape[1] == 2:

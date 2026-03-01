@@ -219,6 +219,22 @@ class VideoProcessor:
         logger.info("Extracted %d frames to %s", len(all_paths), frames_dir)
         return all_paths
 
+    def get_frame_count(self, video_path: str | Path) -> int:
+        """Return total frame count for *video_path*.
+
+        Args:
+            video_path: Path to the source video file.
+
+        Returns:
+            Total frame count as reported by OpenCV.
+        """
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open video: {video_path}")
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        return total_frames
+
     # ------------------------------------------------------------------
     # Generator-based streaming (memory-efficient)
     # ------------------------------------------------------------------

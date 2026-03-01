@@ -184,7 +184,7 @@ class VisualFeatureExtractor:
     """
 
     # Default BlazePose bone connections (subset of 33 landmarks)
-    _DEFAULT_BONE_PAIRS: List[Tuple[int, int]] = [
+    _BLAZEPOSE_BONE_PAIRS: List[Tuple[int, int]] = [
         (11, 13), (13, 15),  # left arm
         (12, 14), (14, 16),  # right arm
         (11, 23), (12, 24),  # torso sides
@@ -192,11 +192,22 @@ class VisualFeatureExtractor:
         (24, 26), (26, 28),  # right leg
     ]
 
+    # COCO 17-point bone connections (RTMPose/RTMO)
+    _COCO_BONE_PAIRS: List[Tuple[int, int]] = [
+        (5, 7), (7, 9),      # left arm
+        (6, 8), (8, 10),     # right arm
+        (5, 11), (6, 12),    # torso sides
+        (11, 13), (13, 15),  # left leg
+        (12, 14), (14, 16),  # right leg
+    ]
+
     def __init__(
         self,
         bone_pairs: Optional[List[Tuple[int, int]]] = None,
     ) -> None:
-        self.bone_pairs = bone_pairs or self._DEFAULT_BONE_PAIRS
+        self.bone_pairs = bone_pairs
+        self._blazepose_pairs = self._BLAZEPOSE_BONE_PAIRS
+        self._coco_pairs = self._COCO_BONE_PAIRS
 
     def extract(self, keypoints: np.ndarray) -> np.ndarray:
         """Compute bone vectors for a single frame.
@@ -209,9 +220,20 @@ class VisualFeatureExtractor:
             Float array of shape ``(num_bones * 2,)`` — concatenated ``(dx, dy)``
             bone vectors.
         """
+        # Auto-detect bone pairs based on keypoint count if not explicitly set
+        if self.bone_pairs is None:
+            num_joints = keypoints.shape[0]
+            if num_joints == 17:  # COCO format (RTMPose)
+                bone_pairs = self._coco_pairs
+            else:  # BlazePose (33 points) or other
+                bone_pairs = self._blazepose_pairs
+        else:
+            bone_pairs = self.bone_pairs
+
         vectors = []
-        for a, b in self.bone_pairs:
-            vectors.append(keypoints[b] - keypoints[a])
+        for a, b in bone_pairs:
+            if a < keypoints.shape[0] and b < keypoints.shape[0]:
+                vectors.append(keypoints[b] - keypoints[a])
         return np.concatenate(vectors, axis=0).astype(np.float32)
 
 
@@ -259,6 +281,43 @@ class TCNSegmenter:
         self.model.load_state_dict(state)
         logger.info("Loaded TCN weights from %s", checkpoint_path)
 
+    def _align_feature_dim(self, features: np.ndarray) -> np.ndarray:
+        """Align feature dimension to what the TCN first layer expects.
+
+        If the extracted features have fewer channels than the model expects,
+        zero-pad the trailing channels. If they have more, truncate extras.
+
+        Args:
+            features: Array of shape ``(time_steps, feature_dim)``.
+
+        Returns:
+            Array of shape ``(time_steps, expected_feature_dim)``.
+        """
+        expected_dim = int(self.model.network[0].conv1.in_channels)
+        current_dim = int(features.shape[1])
+
+        if current_dim == expected_dim:
+            return features
+
+        if current_dim < expected_dim:
+            logger.warning(
+                "TCN input-dim mismatch: model expects %d channels but got %d. "
+                "Applying zero-padding to match expected size.",
+                expected_dim,
+                current_dim,
+            )
+            pad_width = expected_dim - current_dim
+            padding = np.zeros((features.shape[0], pad_width), dtype=features.dtype)
+            return np.concatenate([features, padding], axis=1)
+
+        logger.warning(
+            "TCN input-dim mismatch: model expects %d channels but got %d. "
+            "Truncating extra channels to match expected size.",
+            expected_dim,
+            current_dim,
+        )
+        return features[:, :expected_dim]
+
     def segment(
         self,
         visual_features: np.ndarray,
@@ -286,6 +345,8 @@ class TCNSegmenter:
             combined = np.concatenate([visual_features, audio_resampled], axis=1)
         else:
             combined = visual_features
+
+        combined = self._align_feature_dim(combined)
 
         # Shape: (1, feature_dim, time_steps)
         x = torch.from_numpy(combined.T[np.newaxis]).float().to(self.device)
